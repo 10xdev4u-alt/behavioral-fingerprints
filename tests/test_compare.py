@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -129,6 +131,96 @@ class CompareTests(unittest.TestCase):
         stable = next(row for row in report["results"] if row["slice"] == "stable")
         self.assertEqual(stable["baseline_repeats"], 3)
         self.assertEqual(stable["candidate_repeats"], 3)
+
+
+class GateExitCodeTests(unittest.TestCase):
+    """Exit codes are a public contract that pipelines branch on."""
+
+    def report_with(self, decisions):
+        return {"results": [{"slice": f"s{i}", "decision": decision} for i, decision in enumerate(decisions)]}
+
+    def test_default_policy_never_fails(self):
+        report = self.report_with(["MATERIAL_REGRESSION", "INCONCLUSIVE"])
+        self.assertEqual(compare.gate_exit_code(report, "never"), compare.EXIT_OK)
+
+    def test_material_regression_fails_only_on_regression(self):
+        self.assertEqual(
+            compare.gate_exit_code(self.report_with(["MATERIAL_REGRESSION"]), "material_regression"),
+            compare.EXIT_GATE_FAILED,
+        )
+        self.assertEqual(
+            compare.gate_exit_code(self.report_with(["MATERIAL_IMPROVEMENT"]), "material_regression"),
+            compare.EXIT_OK,
+        )
+
+    def test_equivalence_policy_fails_unless_every_slice_is_within_bounds(self):
+        within = self.report_with(["WITHIN_DECLARED_BOUNDS", "WITHIN_DECLARED_BOUNDS"])
+        self.assertEqual(compare.gate_exit_code(within, "any_not_within_bounds"), compare.EXIT_OK)
+        for decision in ("INCONCLUSIVE", "MATERIAL_IMPROVEMENT", "MATERIAL_REGRESSION"):
+            self.assertEqual(
+                compare.gate_exit_code(self.report_with([decision]), "any_not_within_bounds"),
+                compare.EXIT_GATE_FAILED,
+                decision,
+            )
+
+    def test_unknown_policy_is_rejected(self):
+        with self.assertRaisesRegex(compare.DataError, "unknown gate policy"):
+            compare.gate_exit_code(self.report_with(["INCONCLUSIVE"]), "sometimes")
+
+
+class CliContractTests(unittest.TestCase):
+    def write(self, rows) -> Path:
+        handle = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".jsonl", delete=False)
+        with handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        self.addCleanup(Path(handle.name).unlink, missing_ok=True)
+        return Path(handle.name)
+
+    def regressing(self):
+        rows = []
+        for case_id, before, after in (("a", 0.9, 0.2), ("b", 0.8, 0.1), ("c", 0.85, 0.3)):
+            rows.append({"variant": "baseline", "slice": "s", "case_id": case_id, "repeat": 0, "score": before})
+            rows.append({"variant": "candidate", "slice": "s", "case_id": case_id, "repeat": 0, "score": after})
+        return rows
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = compare.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def base_args(self, path):
+        return [str(path), "--baseline", "baseline", "--candidate", "candidate",
+                "--margin", "0.05", "--bootstrap", "2000", "--seed", "1"]
+
+    def test_report_is_written_before_a_gate_failure(self):
+        args = self.base_args(self.write(self.regressing()))
+        code, out, err = self.run_main(args + ["--fail-on", "material_regression"])
+        self.assertEqual(code, compare.EXIT_GATE_FAILED)
+        # The evidence must survive the failure: a gated build still needs its report.
+        self.assertEqual(json.loads(out)["results"][0]["decision"], "MATERIAL_REGRESSION")
+        self.assertIn("gate failed", err)
+        self.assertIn("s", err)
+
+    def test_same_input_passes_with_the_default_policy(self):
+        args = self.base_args(self.write(self.regressing()))
+        code, out, _ = self.run_main(args)
+        self.assertEqual(code, compare.EXIT_OK)
+        self.assertEqual(json.loads(out)["results"][0]["decision"], "MATERIAL_REGRESSION")
+
+    def test_input_error_is_distinct_from_gate_failure(self):
+        rows = [row for row in self.regressing() if not (row["variant"] == "candidate" and row["case_id"] == "c")]
+        code, out, err = self.run_main(self.base_args(self.write(rows)))
+        self.assertEqual(code, compare.EXIT_INPUT_ERROR)
+        self.assertEqual(out, "")
+        self.assertIn("input error", err)
+
+    def test_gate_policy_is_echoed_in_stderr_not_the_report(self):
+        args = self.base_args(self.write(self.regressing()))
+        _, out, _ = self.run_main(args + ["--fail-on", "material_regression"])
+        # The report must stay reproducible: the caller's gate choice is not data.
+        self.assertNotIn("fail_on", json.loads(out))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,16 @@ from pathlib import Path
 from typing import Any
 
 
+# Exit codes are a public contract: pipelines branch on them.
+EXIT_OK = 0
+EXIT_GATE_FAILED = 1
+EXIT_INPUT_ERROR = 2
+
+# A gate, not a verdict: the decision stays in the report, these only say whether
+# a caller asked for a failing exit status when that decision is present.
+GATE_POLICIES = ("never", "material_regression", "any_not_within_bounds")
+
+
 class DataError(ValueError):
     """Raised when input records cannot support the requested comparison."""
 
@@ -80,6 +90,28 @@ def percentile(sorted_values: list[float], probability: float) -> float:
 # identical case differences can differ in float rounding only, so an exact
 # equality test would miss a degenerate distribution.
 DEGENERATE_WIDTH_TOLERANCE = 1e-12
+
+
+def gate_exit_code(report: dict[str, Any], policy: str) -> int:
+    """Map a finished report and a caller-chosen policy to a process exit code.
+
+    The default is ``never``: producing a report is success, and a script that
+    silently starts failing builds because a number moved is worse than one that
+    asks for that failure explicitly. ``material_regression`` fails only on a
+    regression, which is the usual promotion gate. ``any_not_within_bounds``
+    fails unless every slice stayed inside the declared margin, which is the
+    stricter reading required when the margin is an equivalence requirement.
+    """
+    if policy not in GATE_POLICIES:
+        raise DataError(f"unknown gate policy {policy!r}")
+    if policy == "never":
+        return EXIT_OK
+    decisions = [result["decision"] for result in report["results"]]
+    if policy == "material_regression":
+        failed = any(decision == "MATERIAL_REGRESSION" for decision in decisions)
+    else:
+        failed = any(decision != "WITHIN_DECLARED_BOUNDS" for decision in decisions)
+    return EXIT_GATE_FAILED if failed else EXIT_OK
 
 
 def decide(low: float, high: float, margin: float) -> str:
@@ -471,6 +503,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--markdown", type=Path,
         help="also write a readable Markdown report to this path",
     )
+    parser.add_argument(
+        "--fail-on",
+        choices=GATE_POLICIES,
+        default="never",
+        help=(
+            "exit status 1 when the report matches this condition "
+            "(default: never; the report is always written first)"
+        ),
+    )
     args = parser.parse_args(argv)
     inspect_inputs = (args.inspect_baseline is not None, args.inspect_candidate is not None)
     if any(inspect_inputs):
@@ -520,15 +561,25 @@ def main(argv: list[str] | None = None) -> int:
         )
     except DataError as exc:
         print(f"input error: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_INPUT_ERROR
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     if args.markdown is not None:
         try:
             args.markdown.write_text(render_markdown(report), encoding="utf-8")
         except OSError as exc:
             print(f"output error: cannot write {args.markdown}: {exc}", file=sys.stderr)
-            return 2
-    return 0
+            return EXIT_INPUT_ERROR
+    code = gate_exit_code(report, args.fail_on)
+    if code != EXIT_OK:
+        triggered = ", ".join(
+            result["slice"] for result in report["results"]
+            if result["decision"] != "WITHIN_DECLARED_BOUNDS"
+        )
+        print(
+            f"gate failed: --fail-on {args.fail_on} triggered by slice(s): {triggered}",
+            file=sys.stderr,
+        )
+    return code
 
 
 if __name__ == "__main__":
