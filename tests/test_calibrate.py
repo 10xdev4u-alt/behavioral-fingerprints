@@ -17,13 +17,18 @@ class SharedDecisionRuleTests(unittest.TestCase):
 
     def test_compare_decision_is_derived_from_its_own_interval(self):
         margin = 0.05
+        # Case differences must vary, otherwise the interval is degenerate and the
+        # decision deliberately comes from that condition rather than the margin.
         rows = [
             {"variant": "baseline", "slice": "s", "case_id": "a", "repeat": 0, "score": 0.0},
             {"variant": "candidate", "slice": "s", "case_id": "a", "repeat": 0, "score": 1.0},
             {"variant": "baseline", "slice": "s", "case_id": "b", "repeat": 0, "score": 0.0},
-            {"variant": "candidate", "slice": "s", "case_id": "b", "repeat": 0, "score": 1.0},
+            {"variant": "candidate", "slice": "s", "case_id": "b", "repeat": 0, "score": 0.7},
+            {"variant": "baseline", "slice": "s", "case_id": "c", "repeat": 0, "score": 0.0},
+            {"variant": "candidate", "slice": "s", "case_id": "c", "repeat": 0, "score": 0.1},
         ]
         result = compare.compare(rows, "baseline", "candidate", margin, 2000, 3)["results"][0]
+        self.assertFalse(result["degenerate_interval"])
         low, high = result["bootstrap_95_percentile_interval"]
         self.assertEqual(result["decision"], compare.decide(low, high, margin))
 

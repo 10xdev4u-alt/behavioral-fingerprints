@@ -76,6 +76,12 @@ def percentile(sorted_values: list[float], probability: float) -> float:
     return sorted_values[lower] * (1 - fraction) + sorted_values[upper] * fraction
 
 
+# Widths at or below this are treated as no width at all. Resampled means of
+# identical case differences can differ in float rounding only, so an exact
+# equality test would miss a degenerate distribution.
+DEGENERATE_WIDTH_TOLERANCE = 1e-12
+
+
 def decide(low: float, high: float, margin: float) -> str:
     """Map an interval and a declared practical margin to a scoped decision."""
     if low >= -margin and high <= margin:
@@ -194,7 +200,22 @@ def compare(
         low = percentile(bootstrapped_deltas, 0.025)
         high = percentile(bootstrapped_deltas, 0.975)
 
+        # A resample distribution with no width means every paired case difference
+        # was identical. The decision still follows the observed data and the
+        # declared margin, because that is the scoped claim the interval rule makes;
+        # what it must never do is imply that an interval of no width is precision.
+        # Suppressing a unanimous movement would hide a real signal, so the width is
+        # flagged in the report instead of overriding the decision.
+        degenerate = (high - low) <= DEGENERATE_WIDTH_TOLERANCE
         state = decide(low, high, margin)
+        if degenerate:
+            basis = (
+                "every paired case difference was identical, so the interval has no "
+                "width; the decision applies to these cases only and the width is not "
+                "an estimate of precision"
+            )
+        else:
+            basis = "interval compared against the declared practical margin"
 
         results.append({
             "slice": slice_name,
@@ -206,7 +227,9 @@ def compare(
             "candidate_minus_baseline": observed_delta,
             "bootstrap_95_percentile_interval": [low, high],
             "practical_margin": margin,
+            "degenerate_interval": degenerate,
             "decision": state,
+            "decision_basis": basis,
         })
 
     return {
@@ -228,6 +251,11 @@ def compare(
             "Synthetic/demo or exported scores only; no model is executed by this tool.",
             "A small prototype bootstrap is not a calibrated inferential or release gate.",
             "WITHIN_DECLARED_BOUNDS applies only to these cases and this declared margin.",
+            (
+                "A slice whose resampled differences are all identical is marked "
+                "degenerate_interval: its zero width is an absence of measured "
+                "variation, not an estimate of precision."
+            ),
             "The meaning, reliability, and provenance of input scores must be validated separately.",
         ],
     }
@@ -252,13 +280,19 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for result in report["results"]:
         low, high = result["bootstrap_95_percentile_interval"]
+        marker = " †" if result.get("degenerate_interval") else ""
         lines.append(
             f"| {result['slice']} | {result['paired_cases']} "
             f"| {result['baseline_mean']:.4f} | {result['candidate_mean']:.4f} "
             f"| {result['candidate_minus_baseline']:+.4f} "
             f"| [{low:+.4f}, {high:+.4f}] | ±{result['practical_margin']:.4f} "
-            f"| **{result['decision']}** |"
+            f"| **{result['decision']}**{marker} |"
         )
+    degenerates = [result for result in report["results"] if result.get("degenerate_interval")]
+    if degenerates:
+        lines.extend(["", "† Degenerate resample distribution — every paired case difference was identical."])
+        for result in degenerates:
+            lines.append(f"- `{result['slice']}`: {result['decision_basis']}")
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {limitation}" for limitation in report["limitations"])
     lines.append("")
