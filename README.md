@@ -88,5 +88,6 @@ python3 -m py_compile compare.py calibrate.py tests/test_compare.py tests/test_i
 - The Markdown report is a presentation of the same exploratory JSON result; it does not add validation or a release decision.
 - A small case count, weak score, subjective judge, missing provenance, multiple slices, or an unsuitable score scale can make the interval misleading.
 - `WITHIN_DECLARED_BOUNDS` means only that this exploratory interval fell within this operator-supplied margin for these tested cases. It does not mean safe, clean, equivalent in every respect, or backdoor-free.
+- When every paired case difference is identical, the interval has no width and the slice is marked `degenerate_interval: true` (a `†` in the Markdown table). That zero width is an absence of measured variation, **not** an estimate of precision: with few cases or pass/fail scores it happens routinely. The decision still follows the observed data and the declared margin, so a unanimous movement is not hidden — but the interval must not be read as certainty.
 
 See the accompanying plan for the research gate, protocol, safety boundary, decision semantics, and proposed next tickets.

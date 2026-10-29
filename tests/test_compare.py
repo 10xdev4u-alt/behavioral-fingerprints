@@ -76,6 +76,40 @@ class CompareTests(unittest.TestCase):
         second_stable = next(row for row in second["results"] if row["slice"] == "stable")
         self.assertEqual(first_stable["bootstrap_95_percentile_interval"], second_stable["bootstrap_95_percentile_interval"])
 
+    def test_identical_case_differences_are_flagged_without_implying_precision(self):
+        # Every case moves by exactly the same amount, so the resample distribution
+        # has no width. With only a handful of cases (or pass/fail scores) this is
+        # routine, and the zero width must not be published as precision.
+        rows = []
+        for case_id in ("a", "b", "c"):
+            rows.append({"variant": "baseline", "slice": "tied", "case_id": case_id, "repeat": 0, "score": 1.0})
+            rows.append({"variant": "candidate", "slice": "tied", "case_id": case_id, "repeat": 0, "score": 1.0})
+        result = compare.compare(rows, "baseline", "candidate", 0.05, 2000, 7)["results"][0]
+        self.assertTrue(result["degenerate_interval"])
+        self.assertEqual(result["bootstrap_95_percentile_interval"], [0.0, 0.0])
+        self.assertIn("no width", result["decision_basis"])
+        self.assertIn("not an estimate of precision", result["decision_basis"])
+
+    def test_unanimous_improvement_keeps_its_signal(self):
+        # The flag must not swallow a real, unanimous movement: the decision still
+        # follows the interval and the declared margin.
+        rows = []
+        for case_id in ("a", "b", "c"):
+            rows.append({"variant": "baseline", "slice": "lift", "case_id": case_id, "repeat": 0, "score": 0.0})
+            rows.append({"variant": "candidate", "slice": "lift", "case_id": case_id, "repeat": 0, "score": 1.0})
+        result = compare.compare(rows, "baseline", "candidate", 0.05, 2000, 7)["results"][0]
+        self.assertTrue(result["degenerate_interval"])
+        self.assertEqual(result["decision"], "MATERIAL_IMPROVEMENT")
+
+    def test_degenerate_slice_is_marked_in_markdown(self):
+        rows = []
+        for case_id in ("a", "b"):
+            rows.append({"variant": "baseline", "slice": "tied", "case_id": case_id, "repeat": 0, "score": 0.5})
+            rows.append({"variant": "candidate", "slice": "tied", "case_id": case_id, "repeat": 0, "score": 0.5})
+        markdown = compare.render_markdown(compare.compare(rows, "baseline", "candidate", 0.05, 500, 7))
+        self.assertIn("†", markdown)
+        self.assertIn("Degenerate resample distribution", markdown)
+
     def test_rejects_mismatched_case_sets(self):
         rows = [row for row in self.rows() if not (row["slice"] == "stable" and row["variant"] == "candidate" and row["case_id"] == "b")]
         with self.assertRaisesRegex(compare.DataError, "case IDs do not match"):
