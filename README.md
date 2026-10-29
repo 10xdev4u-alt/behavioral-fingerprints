@@ -51,6 +51,33 @@ The importer was tested end-to-end with two distinct Inspect AI `0.3.286` mock e
 
 Both modes write machine-readable JSON to stdout; `--markdown PATH` additionally writes a readable summary. Exit code `0` means the report was produced; `2` means inputs/arguments or output path are invalid. A produced report can still be `INCONCLUSIVE` and must not be treated as a release approval.
 
+## Use in CI
+
+Exit status is a documented contract, because a pipeline branches on it:
+
+| Code | Meaning |
+|---:|---|
+| `0` | A report was produced and the requested gate did not trigger |
+| `1` | A report was produced and the requested gate triggered |
+| `2` | Usage or input error: nothing was compared, and no report was written |
+
+Gating is opt-in (`--fail-on`, default `never`). A tool that starts failing builds because a number moved is worse than one that is asked to do so explicitly, so the report is always written **before** the exit status is decided — a failing build still has its evidence.
+
+| `--fail-on` | Fails when |
+|---|---|
+| `never` (default) | never |
+| `material_regression` | any slice is `MATERIAL_REGRESSION` |
+| `any_not_within_bounds` | any slice is not `WITHIN_DECLARED_BOUNDS` (treats the margin as an equivalence requirement) |
+
+```sh
+python3 compare.py scores.jsonl --baseline v1 --candidate v2 \
+  --margin 0.05 --fail-on material_regression > report.json
+```
+
+The policy is deliberately **not** recorded in the report: the report describes the data, not what the caller intended to do about it, so two teams with different gates produce identical, comparable reports from identical inputs. The triggering slices are named on stderr instead.
+
+`material_regression` does not fail on `INCONCLUSIVE`. An inconclusive comparison is not evidence of no change, and treating it as a pass is exactly how an underpowered suite gets promoted; `any_not_within_bounds` is the honest option when that distinction matters.
+
 ## Validate the estimator on simulated data
 
 `calibrate.py` simulates paired datasets whose generating process is known and measures whether the interval covers the truth at its nominal rate. It compares the shipped estimator (average repeats within a case, resample cases) with a deliberately wrong one that resamples every repeat as if repeats were independent cases.
