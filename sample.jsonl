@@ -1,0 +1,8 @@
+{"variant":"baseline","slice":"stable-task","case_id":"case-1","repeat":0,"score":1.0}
+{"variant":"candidate","slice":"stable-task","case_id":"case-1","repeat":0,"score":1.0}
+{"variant":"baseline","slice":"stable-task","case_id":"case-2","repeat":0,"score":0.9}
+{"variant":"candidate","slice":"stable-task","case_id":"case-2","repeat":0,"score":0.9}
+{"variant":"baseline","slice":"conditional-probe","case_id":"case-3","repeat":0,"score":0.0}
+{"variant":"candidate","slice":"conditional-probe","case_id":"case-3","repeat":0,"score":1.0}
+{"variant":"baseline","slice":"conditional-probe","case_id":"case-4","repeat":0,"score":0.0}
+{"variant":"candidate","slice":"conditional-probe","case_id":"case-4","repeat":0,"score":1.0}

@@ -1,0 +1,16 @@
+{
+  "status": "success",
+  "eval": {
+    "eval_id": "candidate-run-1",
+    "task_id": "synthetic-task-v1",
+    "task": "synthetic_task",
+    "task_version": 1,
+    "model": "mock/candidate",
+    "dataset": {"name": "toy", "sample_ids": ["order-01", "order-02"]},
+    "config": {"epochs": 1}
+  },
+  "samples": [
+    {"id": "order-01", "epoch": 1, "scores": {"accuracy": {"value": 1.0}}},
+    {"id": "order-02", "epoch": 1, "scores": {"accuracy": {"value": 0.9}}}
+  ]
+}
