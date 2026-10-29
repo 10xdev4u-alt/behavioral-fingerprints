@@ -1,0 +1,15 @@
+# Local virtual environment used for Inspect AI compatibility checks
+.venv/
+venv/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Generated comparison output
+*-report.json
+*-report.md
+calibration-results.json
