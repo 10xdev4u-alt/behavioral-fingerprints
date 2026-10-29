@@ -74,6 +74,27 @@ Recorded result (standard library only; 400 simulations, 500 bootstrap draws, 30
 
 What this supports: with correlated repeats, ignoring the case clustering halves the interval and destroys coverage (0.64 against a nominal 0.95), while averaging repeats within a case and resampling cases holds its nominal rate. What it does not support: any claim about real evaluators, binary or judge-scored outcomes, correlated or near-duplicate real cases, or calibration status as a release gate. In the control the shipped estimator sat slightly under nominal (0.927), which is ordinary small-sample percentile-bootstrap undercoverage, not a guarantee.
 
+### Pass/fail scorers (`--scorer binary`)
+
+`--scorer binary` swaps the graded observation model for pass/fail outcomes, where a case's ability is its success probability. This is the shape of Inspect's `match` scorer and of most accuracy suites, and it changes what the bootstrap is working with: case differences land in `{-1, 0, +1}`, so ties are frequent and the resample distribution is lumpy.
+
+```sh
+python3 calibrate.py --scorer binary --cases 30 --repeats 8 --effect 0.1 \
+  --effect-sd 0.3 --margin 0.05 --bootstrap 500 --simulations 300 --seed 11
+```
+
+Recorded binary results (nominal 95%, population coverage):
+
+| Cases | Repeats | case-level (shipped) | naive repeat-level |
+|---|---|---:|---:|
+| 30 | 3 | 0.948 [0.926, 0.969] | 0.940 [0.917, 0.963] |
+| 30 | 8 | 0.930 | 0.797 |
+| 40 | 12 | 0.937 | 0.793 |
+
+The second and third rows matter more than the first. At three repeats the naive estimator looks fine, so a team would conclude that resampling repeats is harmless — and then add repeats, which is exactly when coverage collapses. The penalty grows with the repeat count, not with the case count, so a low-repeat suite is false comfort rather than evidence of safety.
+
+This is also the reason the tool averages repeats within a case for design validity and not merely to widen the interval: with few repeats the wrong design can pass the coverage check.
+
 Run the dependency-free regression tests and syntax check with:
 
 ```sh

@@ -130,6 +130,90 @@ class CalibrationReportTests(unittest.TestCase):
             self.run_small(simulations=0)
 
 
+class BinaryScorerTests(unittest.TestCase):
+    """The binary observation model was merged before it had any tests."""
+
+    def test_binary_scores_are_only_zero_or_one(self):
+        rows, _ = calibrate.generate_pairs(
+            random.Random(11), cases=25, repeats=3, effect=0.2, effect_sd=0.1,
+            noise_sd=0.0, scorer="binary",
+        )
+        self.assertEqual(len(rows), 25 * 3 * 2)
+        for row in rows:
+            self.assertIn(row["score"], (0.0, 1.0))
+
+    def test_binary_truth_is_the_expected_probability_difference(self):
+        # The binary target is the expected change in success probability, so it
+        # must stay inside [-1, 1] and be exactly zero when nothing moves.
+        _, realized = calibrate.generate_pairs(
+            random.Random(2), cases=40, repeats=1, effect=0.0, effect_sd=0.0,
+            noise_sd=0.0, scorer="binary",
+        )
+        self.assertEqual(realized, 0.0)
+        _, lifted = calibrate.generate_pairs(
+            random.Random(2), cases=40, repeats=1, effect=0.3, effect_sd=0.0,
+            noise_sd=0.0, scorer="binary",
+        )
+        self.assertGreater(lifted, 0.0)
+        self.assertLessEqual(lifted, 1.0)
+
+    def test_binary_cases_share_ability_across_variants(self):
+        # A paired comparison is only meaningful if a hard case stays hard for both
+        # variants. With no effect, each case's two rates must therefore agree up to
+        # sampling noise; they are independent draws, so exact equality would be a
+        # wrong assertion. The seed is fixed, so this is deterministic.
+        repeats = 200
+        rows, _ = calibrate.generate_pairs(
+            random.Random(4), cases=10, repeats=repeats, effect=0.0, effect_sd=0.0,
+            noise_sd=0.0, scorer="binary",
+        )
+        by_case: dict[tuple[str, str], list[float]] = {}
+        for row in rows:
+            by_case.setdefault((row["case_id"], row["variant"]), []).append(row["score"])
+        for case_id in {row["case_id"] for row in rows}:
+            baseline = sum(by_case[(case_id, "baseline")]) / repeats
+            candidate = sum(by_case[(case_id, "candidate")]) / repeats
+            self.assertLess(abs(baseline - candidate), 0.2, case_id)
+
+    def test_unknown_scorer_is_rejected(self):
+        with self.assertRaisesRegex(compare.DataError, "unknown scorer"):
+            calibrate.generate_pairs(
+                random.Random(0), cases=4, repeats=1, effect=0.1, effect_sd=0.0,
+                noise_sd=0.0, scorer="ordinal",
+            )
+
+    def test_report_records_the_scorer_and_swaps_the_limitation(self):
+        report = self.run_binary()
+        self.assertEqual(report["parameters"]["scorer"], "binary")
+        limitations = " ".join(report["limitations"])
+        self.assertIn("Binary pass/fail outcomes only", limitations)
+        self.assertNotIn("bounded continuous quantities", limitations)
+
+    def test_binary_interval_is_wider_than_continuous_for_the_same_effect(self):
+        # Pass/fail carries less information per case than a graded score, so the
+        # same design must produce a wider interval. If it does not, the observation
+        # model is not being applied.
+        binary = self.run_binary()
+        continuous = self.run_small()
+        self.assertGreater(
+            binary["estimators"]["case_level"]["mean_interval_width"],
+            continuous["estimators"]["case_level"]["mean_interval_width"],
+        )
+
+    def run_binary(self):
+        return calibrate.calibrate(
+            cases=20, repeats=3, effect=0.1, effect_sd=0.2, noise_sd=0.0,
+            margin=0.05, bootstrap_samples=200, simulations=30, seed=5,
+            scorer="binary",
+        )
+
+    def run_small(self):
+        return calibrate.calibrate(
+            cases=20, repeats=3, effect=0.1, effect_sd=0.2, noise_sd=0.0,
+            margin=0.05, bootstrap_samples=200, simulations=30, seed=5,
+        )
+
+
 class CliTests(unittest.TestCase):
     def test_invalid_arguments_exit_with_usage_error(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -142,6 +226,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.simulations, 5)
         self.assertEqual(args.bootstrap, 10)
         self.assertGreaterEqual(args.cases, 2)
+        self.assertEqual(args.scorer, "continuous")
+
+    def test_scorer_choices_are_restricted(self):
+        self.assertEqual(calibrate.parse_args(["--scorer", "binary"]).scorer, "binary")
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                calibrate.parse_args(["--scorer", "ordinal"])
+        self.assertEqual(raised.exception.code, 2)
 
 
 if __name__ == "__main__":
